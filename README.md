@@ -14,8 +14,9 @@ explained at the defense.
 | Exercise | Topic | Class |
 |---|---|---|
 | `ex00` | Conversion of scalar types | `ScalarConverter`, with one static method `convert` |
+| `ex01` | Serialization | `Serializer`, with two static methods `serialize` and `deserialize`, and the `Data` struct |
 
-`ex01` (serialization) and `ex02` (identify real type) are not done yet.
+`ex02` (identify real type) is not done yet.
 
 `ScalarConverter::convert` takes a C++ literal as a string, finds its type
 (`char`, `int`, `float` or `double`), converts the string to that type, and
@@ -29,24 +30,37 @@ float: 42.0f
 double: 42.0
 ```
 
+`Serializer` turns the address of a `Data` object into an integer, and the
+integer back into the same pointer:
+
+```
+original pointer : 0x7ffd79b2e470
+serialized (dec) : 140726645220464
+serialized (hex) : 0x7ffd79b2e470
+restored pointer : 0x7ffd79b2e470
+pointers equal   : yes
+```
+
 ## Instructions
 
-The exercise has its own `Makefile`, which builds one program:
+Each exercise has its own `Makefile`, which builds one program:
 
-| Exercise | Program |
-|---|---|
-| `ex00` | `convert` |
+| Exercise | Program | Argument |
+|---|---|---|
+| `ex00` | `convert` | One literal |
+| `ex01` | `serialize` | None |
 
-To build and run the exercise:
+To build and run an exercise:
 
-1. Go to the exercise directory: `cd ex00`.
+1. Go to the exercise directory, for example `cd ex00`.
 2. Run `make`.
-3. Run the program with one literal, for example `./convert 42.0f`.
+3. Run the program: `./convert 42.0f` in `ex00`, `./serialize` in `ex01`.
 
 To check for memory errors, run the program with valgrind:
 
 ```sh
-valgrind --leak-check=full ./convert 42.0f
+valgrind --leak-check=full ./convert 42.0f   # ex00
+valgrind --leak-check=full ./serialize       # ex01
 ```
 
 The `Makefile` rules:
@@ -60,7 +74,7 @@ make re     # run fclean, then build again
 
 The compiler flags are `c++ -Wall -Wextra -Werror -std=c++98`.
 
-About the tests:
+About the tests of `ex00`:
 
 - `main.cpp` passes its one argument to `ScalarConverter::convert`.
 - With no argument, or more than one, the program prints an error and
@@ -80,6 +94,19 @@ About the tests:
 
 - `./convert hello`, `./convert 4.2.1`, `./convert 42f` and `./convert ""`
   print `ex00: bad input`.
+
+About the tests of `ex01`:
+
+- `main.cpp` sends four pointers through `serialize` and `deserialize`.
+- Each test must print `pointers equal   : yes`. The addresses change on
+  each run.
+
+| Test | Pointer to | Extra check |
+|---|---|---|
+| 1 | An object on the stack | The members print through the restored pointer |
+| 2 | An object on the stack | A change through the restored pointer shows in the original object |
+| 3 | An object on the heap | One `delete` through the restored pointer, with no leak |
+| 4 | Nothing (`NULL`) | The integer is 0 |
 
 ## Technical Concepts
 
@@ -157,6 +184,23 @@ ScalarConverter s;                // ❌ error: the constructor is private
 ```cpp
 ScalarConverter::ScalarConverter(const ScalarConverter&) {}
 ```
+
+- **`Serializer`** — uses the same pattern. The subject: *"which will not be
+  initializable by the user in any way"*. The private constructor stops each
+  way to make an object:
+
+| Code | Result |
+|---|---|
+| `Serializer s;` | Error: the constructor is private |
+| `new Serializer` | Error: the constructor is private |
+| An object of a class that inherits from `Serializer` | Error: the constructor is private |
+
+- **Look out for a missing `static`** — a method without `static` needs an
+  object to be called on, and a class like this has none. The call fails with
+  *cannot call member function without object*.
+- **`static` in the header only** — the definition in the `.cpp` doesn't
+  repeat it. There, `static` means "visible only in this file", and the
+  compiler refuses it on a member function.
 
 ### 3. Detecting the type of a literal
 
@@ -395,12 +439,129 @@ std::cout << std::fixed << std::setprecision(1)
 - **The cost** — the output is rounded to one decimal: `0.1234` prints
   `0.1`, and `0.16` prints `0.2`. Only the output changes, not the value.
 
+### 10. A pointer as an integer: `uintptr_t`
+
+- **Pointer** — holds an address, which is a number. The type (`Data*`) is
+  known only to the compiler: it says what lives at that address.
+- **`uintptr_t`** — an unsigned integer type that's wide enough to hold any
+  pointer. On 64-bit Linux it's `unsigned long`, 8 bytes.
+
+| Type | Size on 64-bit Linux | Holds a pointer |
+|---|---|---|
+| `int` | 4 | no: the cast *loses precision*, a compile error |
+| `unsigned long` | 8 | yes, but not on 64-bit Windows, where it has 4 bytes |
+| `uintptr_t` | 8 | yes |
+
+- **Include** — the type isn't built in, so `Serializer.hpp` includes the
+  header that declares it:
+
+| Include | With `-std=c++98` |
+|---|---|
+| `<cstdint>` | Compile error: the header is C++11 |
+| `<stdint.h>` | Compiles: the header comes from C |
+
+- **Look out for `intptr_t`** — it's the signed version. Mixing the two
+  compiles and keeps the address, but the value changes between signed and
+  unsigned with no visible cast. `-Wsign-conversion` reports it.
+
+### 11. `reinterpret_cast`
+
+- **`reinterpret_cast`** — keeps the same address and makes the compiler see
+  it as an unrelated type. This is the cast of `ex01`:
+
+```cpp
+uintptr_t raw = reinterpret_cast<uintptr_t>(ptr);   // pointer to integer
+Data* back = reinterpret_cast<Data*>(raw);          // integer to pointer
+```
+
+- **Why not another cast** — none of the others compiles from `Data*` to
+  `uintptr_t`:
+
+| Cast | Why it fails here |
+|---|---|
+| No cast | The conversion is never implicit |
+| `static_cast` | A pointer and an integer aren't related types |
+| `dynamic_cast` | The target must be a pointer or a reference |
+| `const_cast` | The target must be a pointer or a reference |
+
+- **Compared with `static_cast`** — `static_cast` makes a new value that fits
+  the new type; `reinterpret_cast` changes only how the compiler sees the
+  address:
+
+| Code | Result |
+|---|---|
+| `static_cast<uintptr_t>(4.9)` | `4`, a new value |
+| `static_cast<uintptr_t>(ptr)` | Compile error |
+| `reinterpret_cast<uintptr_t>(ptr)` | The address as an integer |
+
+- **What isn't checked** — the number, the type behind it, and whether the
+  object still exists. `deserialize(12345)` compiles, but using the pointer
+  it returns is undefined behavior.
+- **What is checked** — `const`. A `reinterpret_cast` from `const Data*` to
+  `Data*` doesn't compile.
+- **Look out for `&ptr`** — `ptr` already holds the address of the object.
+  `&ptr` is the address of the parameter itself, which is gone when the
+  function returns. It compiles, and the restored pointer is wrong:
+
+```cpp
+reinterpret_cast<uintptr_t>(ptr)    // ✅ the address of the object
+reinterpret_cast<uintptr_t>(&ptr)   // ❌ compiles: the address of the parameter
+```
+
+### 12. Serialization and the `Data` struct
+
+- **Serialization** — usually means turning an object into a form that can be
+  saved or sent, and building it again later. `ex01` converts only the
+  **address**, not the content:
+
+| | Usual serialization | `ex01` |
+|---|---|---|
+| What is converted | The members of the object | The address of the object |
+| Result of the way back | A new object with equal members | A pointer to the same object |
+| Valid in another program run | yes | no |
+
+- **Same object, not a copy** — the two pointers lead to one object, so a
+  change through one shows through the other. For an object on the heap,
+  `delete` is called once, through either pointer.
+- **Compare the pointers** — the subject asks that the result *"compares
+  equal to the original pointer"*. Equal members prove less, because two
+  different objects can hold the same values.
+- **What it's good for** — code that can carry only a number. Linux `epoll`
+  stores one 64-bit integer with each event; a program can put the address of
+  its own object there, and gets it back with the event.
+- **Technical choice: `Data` is a plain struct** — it owns no `new` memory,
+  so the constructor, the copy and the destructor that the compiler writes
+  are already correct. The subject calls it a *"structure"*, so it has no
+  Orthodox Canonical Form members.
+- **Look out for unset members** — `Data data;` doesn't set the `int`. The
+  compiler flags don't report it, and printing it shows a random value. The
+  `std::string` starts empty, because its own constructor runs.
+
+### 13. Stream settings: `std::hex` and `std::dec`
+
+- **`std::hex`** — prints integers in hexadecimal, so the serialized integer
+  can be compared with the pointer, which `std::cout` already prints in
+  hexadecimal.
+- **Look out for settings that stay on** — `std::hex` changes the stream, not
+  one value. Every later integer is in hexadecimal too, until `std::dec`:
+
+```cpp
+std::cout << std::hex << 42 << " " << 42 << std::dec << " " << 42;
+// 2a 2a 42
+```
+
+- **One stream only** — the setting belongs to `std::cout`. `std::cerr` keeps
+  its own.
+
 ## Resources
 
 **References**
 
 - [cppreference — static_cast](https://en.cppreference.com/w/cpp/language/static_cast)
 - [cppreference — Explicit type conversion (C-style cast)](https://en.cppreference.com/w/cpp/language/explicit_cast)
+- [cppreference — reinterpret_cast](https://en.cppreference.com/w/cpp/language/reinterpret_cast)
+- [cppreference — uintptr_t (fixed width integer types)](https://en.cppreference.com/w/cpp/types/integer)
+- [cppreference — std::hex, std::dec](https://en.cppreference.com/w/cpp/io/manip/hex)
 - [cppreference — std::numeric_limits](https://en.cppreference.com/w/cpp/types/numeric_limits)
 - [cppreference — std::strtol](https://en.cppreference.com/w/cpp/string/byte/strtol)
 - [cppreference — std::strtod](https://en.cppreference.com/w/cpp/string/byte/strtof)
@@ -417,17 +578,25 @@ Specific uses:
   - Why `isdigit` and `isprint` need an `unsigned char`
   - Why nan isn't equal to itself, and infinity in `float` and `double`
   - Why the range check comes before the cast
+  - What a pointer holds, and why `reinterpret_cast` is the cast for `ex01`
+  - Why `std::hex` needs `std::dec` after it
 - **Design review**
   - The order of the type checks
   - The fallback to `double` for an `int` that's too large
   - One `double` for all the types
   - The choice to reject `42.` and `.5`
+  - `Data` as a plain struct
 - **Requirement and code review**
   - Checked the code against the subject PDF
   - Compiled with `-std=c++98`, and ran edge cases with sanitizers and
     valgrind
   - Reviewed the overflow handling, the sign of infinity, the output format
     and the C++11 functions to avoid
+  - Reviewed `Serializer`, and tested which casts and includes compile
+- **Code**
+  - Wrote the `ex01` test program (`main.cpp`) and the `Data` struct
+  - Adapted the `Makefile` for `ex01`, and corrected a draft of
+    `Serializer.hpp`
 - **Documentation**
   - Drafted this README from the code and the discussions
 
