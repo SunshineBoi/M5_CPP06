@@ -15,8 +15,7 @@ explained at the defense.
 |---|---|---|
 | `ex00` | Conversion of scalar types | `ScalarConverter`, with one static method `convert` |
 | `ex01` | Serialization | `Serializer`, with two static methods `serialize` and `deserialize`, and the `Data` struct |
-
-`ex02` (identify real type) is not done yet.
+| `ex02` | Identify real type | `Base` and the empty classes `A`, `B`, `C`, with the functions `generate` and `identify` |
 
 `ScalarConverter::convert` takes a C++ literal as a string, finds its type
 (`char`, `int`, `float` or `double`), converts the string to that type, and
@@ -41,6 +40,16 @@ restored pointer : 0x7ffd79b2e470
 pointers equal   : yes
 ```
 
+`generate` makes an `A`, `B` or `C` at random and returns it as a `Base*`.
+`identify` finds the real class, once through a pointer and once through a
+reference:
+
+```
+expected B
+  pointer   : B
+  reference : B
+```
+
 ## Instructions
 
 Each exercise has its own `Makefile`, which builds one program:
@@ -49,18 +58,21 @@ Each exercise has its own `Makefile`, which builds one program:
 |---|---|---|
 | `ex00` | `convert` | One literal |
 | `ex01` | `serialize` | None |
+| `ex02` | `identify` | None |
 
 To build and run an exercise:
 
 1. Go to the exercise directory, for example `cd ex00`.
 2. Run `make`.
-3. Run the program: `./convert 42.0f` in `ex00`, `./serialize` in `ex01`.
+3. Run the program: `./convert 42.0f` in `ex00`, `./serialize` in `ex01`,
+   `./identify` in `ex02`.
 
 To check for memory errors, run the program with valgrind:
 
 ```sh
 valgrind --leak-check=full ./convert 42.0f   # ex00
 valgrind --leak-check=full ./serialize       # ex01
+valgrind --leak-check=full ./identify        # ex02
 ```
 
 The `Makefile` rules:
@@ -108,9 +120,24 @@ About the tests of `ex01`:
 | 3 | An object on the heap | One `delete` through the restored pointer, with no leak |
 | 4 | Nothing (`NULL`) | The integer is 0 |
 
+About the tests of `ex02`:
+
+- `main.cpp` runs three tests. Each object is printed by both versions of
+  `identify`, so the two answers can be compared.
+- The random objects change on each run.
+
+| Test | Objects | Expected |
+|---|---|---|
+| 1 | Ten objects from `generate` | The pointer and the reference lines show the same letter |
+| 2 | One `A`, `B`, `C` and a plain `Base` | Each answer matches the `expected` line; a plain `Base` gives `Unknown type` |
+| 3 | `NULL`, pointer version only | `Unknown type` |
+
 ## Technical Concepts
 
-### 1. Casts in C++
+The concepts are grouped by exercise. The overview first compares the four
+casts, because each exercise uses one of them.
+
+### Overview: the four casts
 
 | Cast | What it converts | Checked |
 |---|---|---|
@@ -118,6 +145,15 @@ About the tests of `ex01`:
 | `dynamic_cast` | A base pointer or reference to a derived type | At runtime |
 | `reinterpret_cast` | The same bits read as an unrelated type | Not checked |
 | `const_cast` | Adds or removes `const` | At compile time |
+
+- **Why not the C-style cast** — `(int)d` tries several kinds of cast and
+  uses the first that works, so a mistake can silently become a
+  `reinterpret_cast`. A named cast refuses to compile instead, and is easy
+  to search for.
+
+### ex00 — Conversion of scalar types
+
+#### 1. `static_cast`
 
 - **`static_cast`** — asks for a conversion that the compiler knows how to
   do. It makes a **new value** of the other type and leaves the original
@@ -130,10 +166,6 @@ About the tests of `ex01`:
 int i = static_cast<int>(4.9);   // 4: the decimals are dropped
 ```
 
-- **Why not the C-style cast** — `(int)d` tries several kinds of cast and
-  uses the first that works, so a mistake can silently become a
-  `reinterpret_cast`. A named cast refuses to compile instead, and is easy
-  to search for.
 - **Look out for hidden conversions** — a conversion can also happen with no
   cast at all. `std::isprint` takes an `int`, so passing it a `double`
   compiles and converts the value silently. Write the cast, so that it's
@@ -144,7 +176,7 @@ std::isprint(val)                      // hidden: double to int
 std::isprint(static_cast<char>(val))   // visible
 ```
 
-### 2. A class that can't be instantiated
+#### 2. A class that can't be instantiated
 
 - **The rule** — the subject: *"As this class doesn't need to store
   anything at all, it must not be instantiable by users."*
@@ -185,24 +217,7 @@ ScalarConverter s;                // ❌ error: the constructor is private
 ScalarConverter::ScalarConverter(const ScalarConverter&) {}
 ```
 
-- **`Serializer`** — uses the same pattern. The subject: *"which will not be
-  initializable by the user in any way"*. The private constructor stops each
-  way to make an object:
-
-| Code | Result |
-|---|---|
-| `Serializer s;` | Error: the constructor is private |
-| `new Serializer` | Error: the constructor is private |
-| An object of a class that inherits from `Serializer` | Error: the constructor is private |
-
-- **Look out for a missing `static`** — a method without `static` needs an
-  object to be called on, and a class like this has none. The call fails with
-  *cannot call member function without object*.
-- **`static` in the header only** — the definition in the `.cpp` doesn't
-  repeat it. There, `static` means "visible only in this file", and the
-  compiler refuses it on a member function.
-
-### 3. Detecting the type of a literal
+#### 3. Detecting the type of a literal
 
 - **Literal** — a value written directly in code: `'a'`, `42`, `4.2f`,
   `4.2`. Its *shape* gives its type, so detection checks the text and
@@ -250,7 +265,7 @@ if (!skip_digits(str, i))
   asks for the *"most common form"*, so at least one digit is needed on
   each side of the dot.
 
-### 4. Characters and `<cctype>`
+#### 4. Characters and `<cctype>`
 
 - **`isdigit`, `isprint`** — take an `int` that must be 0 to 255 or `EOF`.
   Any other value is undefined behavior.
@@ -272,7 +287,7 @@ std::isdigit(static_cast<unsigned char>(str[i]))
   4294967235, which turns back into -61 when it's passed as an `int`. Only
   `unsigned char` gives 195.
 
-### 5. Parsing: from string to value
+#### 5. Parsing: from string to value
 
 - **`std::strtol`** — reads an integer into a `long`, which is wider than
   `int` on 64-bit Linux. That makes the overflow visible:
@@ -321,7 +336,7 @@ if (!ok)
     return (print_err("ex00: impossible, value is too large"));
 ```
 
-### 6. Range check before the cast
+#### 6. Range check before the cast
 
 - **Undefined behavior** — casting a value that doesn't fit: a `double`
   outside the `int` range to `int`, or a finite `double` outside the `float`
@@ -357,7 +372,7 @@ val = static_cast<double>(static_cast<float>(d));   // then cast
   dropped, so `127.5` prints `impossible` for char although 127 would fit.
   It's stricter, and never unsafe.
 
-### 7. Special values: nan and infinity
+#### 7. Special values: nan and infinity
 
 - **Pseudo-literals** — `nan`, `+inf`, `-inf` and their float forms. Their
   values come from `std::numeric_limits`, not from digits:
@@ -390,7 +405,7 @@ val = static_cast<double>(static_cast<float>(d));   // then cast
 - **The `+` sign** — `std::cout` prints positive infinity as `inf`, so
   `+inf` is printed as text.
 
-### 8. One `double` for all the types
+#### 8. One `double` for all the types
 
 - **The idea** — every value is parsed into its own type, then kept in one
   `double`. The four print functions then work for every input:
@@ -418,7 +433,7 @@ print_double(val);
   each branch. It follows the subject word for word and gives the same
   results, but repeats the casts and the range checks four times.
 
-### 9. Floating-point precision and output
+#### 9. Floating-point precision and output
 
 - **Not every integer fits in a `float`** — with 24 bits of precision, a
   `float` is exact only up to 16777216. That's why `2147483647` prints as
@@ -439,7 +454,29 @@ std::cout << std::fixed << std::setprecision(1)
 - **The cost** — the output is rounded to one decimal: `0.1234` prints
   `0.1`, and `0.16` prints `0.2`. Only the output changes, not the value.
 
-### 10. A pointer as an integer: `uintptr_t`
+### ex01 — Serialization
+
+#### 1. `Serializer`: a class that can't be instantiated
+
+- **The rule** — `Serializer` uses the same pattern as `ScalarConverter`
+  (`ex00`, section 2). The subject: *"which will not be
+  initializable by the user in any way"*. The private constructor stops each
+  way to make an object:
+
+| Code | Result |
+|---|---|
+| `Serializer s;` | Error: the constructor is private |
+| `new Serializer` | Error: the constructor is private |
+| An object of a class that inherits from `Serializer` | Error: the constructor is private |
+
+- **Look out for a missing `static`** — a method without `static` needs an
+  object to be called on, and a class like this has none. The call fails with
+  *cannot call member function without object*.
+- **`static` in the header only** — the definition in the `.cpp` doesn't
+  repeat it. There, `static` means "visible only in this file", and the
+  compiler refuses it on a member function.
+
+#### 2. A pointer as an integer: `uintptr_t`
 
 - **Pointer** — holds an address, which is a number. The type (`Data*`) is
   known only to the compiler: it says what lives at that address.
@@ -464,7 +501,7 @@ std::cout << std::fixed << std::setprecision(1)
   compiles and keeps the address, but the value changes between signed and
   unsigned with no visible cast. `-Wsign-conversion` reports it.
 
-### 11. `reinterpret_cast`
+#### 3. `reinterpret_cast`
 
 - **`reinterpret_cast`** — keeps the same address and makes the compiler see
   it as an unrelated type. This is the cast of `ex01`:
@@ -508,7 +545,7 @@ reinterpret_cast<uintptr_t>(ptr)    // ✅ the address of the object
 reinterpret_cast<uintptr_t>(&ptr)   // ❌ compiles: the address of the parameter
 ```
 
-### 12. Serialization and the `Data` struct
+#### 4. Serialization and the `Data` struct
 
 - **Serialization** — usually means turning an object into a form that can be
   saved or sent, and building it again later. `ex01` converts only the
@@ -537,7 +574,7 @@ reinterpret_cast<uintptr_t>(&ptr)   // ❌ compiles: the address of the paramete
   compiler flags don't report it, and printing it shows a random value. The
   `std::string` starts empty, because its own constructor runs.
 
-### 13. Stream settings: `std::hex` and `std::dec`
+#### 5. Stream settings: `std::hex` and `std::dec`
 
 - **`std::hex`** — prints integers in hexadecimal, so the serialized integer
   can be compared with the pointer, which `std::cout` already prints in
@@ -553,6 +590,134 @@ std::cout << std::hex << 42 << " " << 42 << std::dec << " " << 42;
 - **One stream only** — the setting belongs to `std::cout`. `std::cerr` keeps
   its own.
 
+### ex02 — Identify real type
+
+#### 1. Polymorphic classes and the virtual destructor
+
+- **The rule** — the subject asks for *"a Base class that has a public
+  virtual destructor only"*, and three empty classes that inherit from it:
+
+```cpp
+class Base
+{
+public:
+    virtual ~Base();
+};
+
+class A : public Base {};
+```
+
+- **Polymorphic class** — a class with at least one virtual function. Each
+  object then carries a hidden pointer to the data of its real class, so an
+  empty `A` has a size of 8 bytes. `dynamic_cast` reads that data at runtime.
+- **Without `virtual`** — `dynamic_cast` doesn't compile: *source type is not
+  polymorphic*.
+- **Correct `delete`** — `generate` returns a `Base*`, and `delete` goes
+  through it. A virtual destructor runs the destructor of the real class
+  first, then the one of `Base`.
+- **Empty body** — `Base` owns nothing, so the destructor has nothing to do.
+  The body is still needed in `Base.cpp`, because the destructors of `A`, `B`
+  and `C` call it:
+
+```cpp
+Base::~Base() {}
+```
+
+- **No destructor in `A`** — the compiler writes one, and it's virtual too,
+  because the destructor of `Base` is.
+- **Look out for `Base::` inside the class** — the name of the class goes
+  before the function only outside the class. Inside, it's an error: *extra
+  qualification 'Base::' on member 'Base'*.
+
+#### 2. `dynamic_cast`
+
+- **`dynamic_cast`** — converts a base pointer or reference to a derived type,
+  and checks at runtime that the object really is of that type. This is the
+  cast of `ex02`:
+
+```cpp
+if (dynamic_cast<A*>(p) != NULL)
+    std::cout << "A" << std::endl;
+```
+
+- **Why at runtime** — `generate` picks the class with a random number, so
+  the compiler can't know it.
+- **Downcast** — a cast from a base class to a derived class. It can be
+  wrong, because not every `Base` is an `A`. Each cast, tried on a `B`:
+
+| Cast | Result |
+|---|---|
+| No cast | Compile error: a downcast is never implicit |
+| `const_cast<A*>(p)` | Compile error: it changes only `const` |
+| `static_cast<A*>(p)` | Compiles, not `NULL`: no runtime check, so the answer is always yes |
+| `reinterpret_cast<A*>(p)` | Compiles, not `NULL`: no check at all |
+| `dynamic_cast<A*>(p)` | `NULL`: the object isn't an `A` |
+
+- **Two ways to fail** — a pointer can be `NULL`, a reference can't. So the
+  reference form throws an exception instead:
+
+| | `dynamic_cast<A*>(p)` | `dynamic_cast<A&>(p)` |
+|---|---|---|
+| It is an `A` | The pointer | The reference |
+| It isn't an `A` | `NULL` | Throws `std::bad_cast` |
+| Check with | `if` | `try` and `catch` |
+
+- **`try` and `catch`** — if a line in the `try` block throws, the rest of the
+  block is skipped and the `catch` block runs. With no `catch`, the program
+  stops. `identify(Base& p)` asks one class in each block, and returns after
+  a yes:
+
+```cpp
+try
+{
+    (void)dynamic_cast<A&>(p);   // throws if p isn't an A
+    std::cout << "A" << std::endl;
+    return ;
+}
+catch (std::exception&) {}
+```
+
+- **Look out for `std::bad_cast`** — it's declared in `<typeinfo>`, which the
+  subject forbids. Without the header it doesn't compile. `std::bad_cast`
+  inherits from `std::exception`, which is in `<exception>`, so a `catch` of
+  the base class catches it.
+- **`(void)`** — shows that the result of the cast isn't used on purpose.
+  Only the exception matters.
+- **No pointer in the reference version** — the subject forbids it. The
+  function uses only the reference `p`.
+- **`NULL` and a plain `Base`** — every cast gives `NULL` or throws, so both
+  versions print `Unknown type`.
+
+#### 3. Random numbers: `std::srand` and `std::rand`
+
+- **`std::rand`** — returns the next number of a fixed sequence. `std::rand()
+  % 3` gives 0, 1 or 2, one value for each class.
+- **`std::srand`** — sets where the sequence starts (the *seed*). It returns
+  nothing: it stores the seed in a hidden variable of the C library, and
+  each `std::rand` call reads and updates that variable.
+- **Same seed, same sequence** — without `srand`, the program behaves as if
+  it called `srand(1)`, so every run gives the same objects:
+
+| Seed | First five `std::rand() % 3` |
+|---|---|
+| No `srand` | `1 1 0 1 2` |
+| `srand(1)` | `1 1 0 1 2` |
+| `srand(42)` | `0 0 2 0 1` |
+| `srand(42)` again | `0 0 2 0 1` |
+
+- **`std::time(NULL)`** — the number of seconds since 1970, so the seed
+  changes each second:
+
+```cpp
+std::srand(static_cast<unsigned int>(std::time(NULL)));
+```
+
+- **The cast** — `std::time` returns a `time_t`, and `std::srand` takes an
+  `unsigned int`. The `static_cast` makes the conversion visible.
+- **Look out for `srand` in `generate`** — each call in the same second
+  restarts the same sequence, so every object is the same class. Call it
+  once, at the start of `main`.
+
 ## Resources
 
 **References**
@@ -560,6 +725,10 @@ std::cout << std::hex << 42 << " " << 42 << std::dec << " " << 42;
 - [cppreference — static_cast](https://en.cppreference.com/w/cpp/language/static_cast)
 - [cppreference — Explicit type conversion (C-style cast)](https://en.cppreference.com/w/cpp/language/explicit_cast)
 - [cppreference — reinterpret_cast](https://en.cppreference.com/w/cpp/language/reinterpret_cast)
+- [cppreference — dynamic_cast](https://en.cppreference.com/w/cpp/language/dynamic_cast)
+- [cppreference — std::bad_cast](https://en.cppreference.com/w/cpp/types/bad_cast)
+- [cppreference — std::rand](https://en.cppreference.com/w/cpp/numeric/random/rand)
+- [cppreference — std::srand](https://en.cppreference.com/w/cpp/numeric/random/srand)
 - [cppreference — uintptr_t (fixed width integer types)](https://en.cppreference.com/w/cpp/types/integer)
 - [cppreference — std::hex, std::dec](https://en.cppreference.com/w/cpp/io/manip/hex)
 - [cppreference — std::numeric_limits](https://en.cppreference.com/w/cpp/types/numeric_limits)
@@ -580,25 +749,27 @@ Specific uses:
   - Why the range check comes before the cast
   - What a pointer holds, and why `reinterpret_cast` is the cast for `ex01`
   - Why `std::hex` needs `std::dec` after it
+  - What makes a class polymorphic, and what the virtual destructor does
+  - Why a failed `dynamic_cast` gives `NULL` for a pointer and throws for a
+    reference
+  - What `std::srand` and `std::rand` do
 - **Design review**
   - The order of the type checks
   - The fallback to `double` for an `int` that's too large
   - One `double` for all the types
   - The choice to reject `42.` and `.5`
   - `Data` as a plain struct
-- **Requirement and code review**
+  - Catching `std::exception` instead of `std::bad_cast`
+  - Where `std::srand` is called
+- **Code review**
   - Checked the code against the subject PDF
   - Compiled with `-std=c++98`, and ran edge cases with sanitizers and
     valgrind
   - Reviewed the overflow handling, the sign of infinity, the output format
     and the C++11 functions to avoid
   - Reviewed `Serializer`, and tested which casts and includes compile
-- **Code**
-  - Wrote the `ex01` test program (`main.cpp`) and the `Data` struct
-  - Adapted the `Makefile` for `ex01`, and corrected a draft of
-    `Serializer.hpp`
-- **Documentation**
-  - Drafted this README from the code and the discussions
+  - Reviewed `generate` and both `identify` functions, and tested each cast
+    on the wrong class
 
 The final decisions were made manually. AI was used to
 ask questions, review drafts, and reason through edge cases.
